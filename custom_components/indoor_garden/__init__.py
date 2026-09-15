@@ -9,7 +9,7 @@ from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.setup import async_setup_component
 
@@ -23,6 +23,7 @@ from .const import (
     STATIC_URL,
 )
 from .controller import GrowZone
+from .websocket import async_register_websocket_handlers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ _CARD_FLAG = f"{DOMAIN}_card"
 
 async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
+    async_register_websocket_handlers(hass)
     return True
 
 
@@ -77,6 +79,10 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         return
     zone.name = entry.data.get("name", entry.title)
     zone.update_entities(list(entry.data.get(CONF_ENTITIES, [])))
+    registry = dr.async_get(hass)
+    device = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    if device and device.name != zone.name:
+        registry.async_update_device(device.id, name=zone.name)
     await zone.async_apply()
 
 
@@ -91,7 +97,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if not hass.data.get(_CARD_FLAG):
         hass.data[_CARD_FLAG] = True
         try:
-            frontend.add_extra_js_url(hass, f"{CARD_JS}?v=0.1.2")
+            frontend.add_extra_js_url(hass, f"{CARD_JS}?v=0.2.0")
         except Exception:  # noqa: BLE001
             hass.data.pop(_CARD_FLAG, None)
             _LOGGER.debug("Could not register Indoor Garden Lovelace module")
@@ -106,7 +112,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             hass,
             webcomponent_name="indoor-garden-panel",
             frontend_url_path=PANEL_URL_PATH,
-            module_url=f"{PANEL_JS}?v=0.1.2",
+            module_url=f"{PANEL_JS}?v=0.2.0",
             sidebar_title="Indoor Garden",
             sidebar_icon="mdi:sprout",
             require_admin=False,

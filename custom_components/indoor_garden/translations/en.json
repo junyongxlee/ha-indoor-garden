@@ -28,6 +28,10 @@
         "data": {
           "name": "Zone name",
           "entities": "Grow lights"
+        },
+        "data_description": {
+          "name": "Shown in the Indoor Garden panel and as the device name.",
+          "entities": "Change which switches or lights this zone turns on and off."
         }
       }
     },

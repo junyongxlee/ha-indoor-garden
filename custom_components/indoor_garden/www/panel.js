@@ -1,5 +1,13 @@
 const TAG = "indoor-garden-panel";
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function zoneEntities(hass) {
   const entities = hass.entities || {};
   const byDevice = {};
@@ -21,14 +29,38 @@ function shortTime(state) {
   return String(state.state).slice(0, 5);
 }
 
+function asList(value) {
+  if (!value) return [];
+  return Array.isArray(value) ? value.filter(Boolean) : [value];
+}
+
+function navigate(path) {
+  history.pushState(null, "", path);
+  window.dispatchEvent(
+    new CustomEvent("location-changed", {
+      bubbles: true,
+      composed: true,
+      detail: { replace: false },
+    })
+  );
+}
+
 class IndoorGardenPanel extends HTMLElement {
   constructor() {
     super();
     this._root = this.attachShadow({ mode: "open" });
+    this._editing = null;
+    this._editError = "";
+    this._busy = false;
+    this._selectorEl = null;
   }
 
   set hass(hass) {
     this._hass = hass;
+    if (this._editing && this._selectorEl) {
+      this._selectorEl.hass = hass;
+      return;
+    }
     this._render();
   }
 
@@ -38,6 +70,15 @@ class IndoorGardenPanel extends HTMLElement {
 
   _call(entityId, domain, service, data) {
     this._hass.callService(domain, service, { entity_id: entityId, ...data });
+  }
+
+  _isAdmin() {
+    return Boolean(this._hass?.user?.is_admin);
+  }
+
+  _entryId(modeEntityId) {
+    const unique = this._hass.entities[modeEntityId]?.unique_id || "";
+    return unique.endsWith("_mode") ? unique.slice(0, -5) : unique;
   }
 
   _render() {
@@ -69,25 +110,33 @@ class IndoorGardenPanel extends HTMLElement {
           margin: 0;
         }
         .sub { color: var(--secondary-text-color); margin: 4px 0 0; }
-        .add {
+        .add, .primary, .danger, .ghost {
           border: 0;
           border-radius: 20px;
           padding: 8px 14px;
-          background: var(--primary-color);
-          color: var(--text-primary-color, #fff);
           cursor: pointer;
           font: inherit;
         }
+        .add, .primary {
+          background: var(--primary-color);
+          color: var(--text-primary-color, #fff);
+        }
+        .danger {
+          background: var(--error-color, #db4437);
+          color: #fff;
+        }
+        .ghost {
+          background: transparent;
+          color: var(--primary-color);
+        }
+        button:disabled { opacity: 0.6; cursor: default; }
         .empty {
           padding: 32px 16px;
           text-align: center;
           color: var(--secondary-text-color);
         }
-        .grid {
-          display: grid;
-          gap: 12px;
-        }
-        ha-card, .card {
+        .grid { display: grid; gap: 12px; }
+        .card {
           background: var(--card-background-color, var(--ha-card-background));
           border-radius: var(--ha-card-border-radius, 12px);
           box-shadow: var(--ha-card-box-shadow);
@@ -124,7 +173,7 @@ class IndoorGardenPanel extends HTMLElement {
           font-size: 0.8rem;
           color: var(--secondary-text-color);
         }
-        select, input[type="time"] {
+        select, input[type="time"], input[type="text"] {
           border: 0;
           border-radius: 10px;
           background: var(--secondary-background-color, rgba(255,255,255,0.06));
@@ -134,10 +183,36 @@ class IndoorGardenPanel extends HTMLElement {
           padding: 10px 12px;
         }
         .entities { margin-top: 12px; font-size: 0.85rem; color: var(--secondary-text-color); }
-        .gear {
-          border: 0; background: transparent; color: var(--secondary-text-color);
-          cursor: pointer; font-size: 1.2rem;
+        .entities button {
+          border: 0; background: transparent; color: var(--primary-color);
+          cursor: pointer; font: inherit; padding: 0 0 0 8px;
         }
+        .gear, .edit {
+          border: 0; background: transparent; color: var(--secondary-text-color);
+          cursor: pointer; font-size: 0.9rem;
+        }
+        .edit { color: var(--primary-color); }
+        .backdrop {
+          position: fixed; inset: 0;
+          background: rgba(0,0,0,0.45);
+          display: flex; align-items: center; justify-content: center;
+          padding: 16px;
+          z-index: 8;
+        }
+        .dialog {
+          width: min(560px, 100%);
+          max-height: 90vh;
+          overflow: auto;
+        }
+        .dialog h2 { margin: 0 0 4px; font-size: 1.25rem; font-weight: 600; }
+        .hint { color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 16px; }
+        .field { margin-bottom: 14px; }
+        .error { color: var(--error-color, #db4437); font-size: 0.85rem; margin: 8px 0; }
+        .actions {
+          display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
+          margin-top: 18px;
+        }
+        .actions .danger { margin-right: auto; }
       </style>
       <div class="wrap">
         <header>
@@ -155,25 +230,31 @@ class IndoorGardenPanel extends HTMLElement {
             : `<div class="card empty">No grow zones yet. Add a zone and pick the lights or sockets it should control.</div>`
         }
       </div>
+      ${this._editing ? this._dialogHtml() : ""}
     `;
 
-    this._root.querySelector(".add").addEventListener("click", () => {
-      history.pushState(null, "", "/config/integrations/dashboard/add?domain=indoor_garden");
-      window.dispatchEvent(new CustomEvent("location-changed", { bubbles: true, composed: true, detail: { replace: false } }));
+    this._root.querySelector(".add")?.addEventListener("click", () => {
+      navigate("/config/integrations/dashboard/add?domain=indoor_garden");
     });
-
     this._root.querySelectorAll("[data-mode]").forEach((el) => {
-      el.addEventListener("change", () => this._call(el.dataset.mode, "select", "select_option", { option: el.value }));
+      el.addEventListener("change", () =>
+        this._call(el.dataset.mode, "select", "select_option", { option: el.value })
+      );
     });
     this._root.querySelectorAll("[data-start]").forEach((el) => {
-      el.addEventListener("change", () => this._call(el.dataset.start, "time", "set_value", { time: el.value + ":00" }));
+      el.addEventListener("change", () =>
+        this._call(el.dataset.start, "time", "set_value", { time: `${el.value}:00` })
+      );
     });
     this._root.querySelectorAll("[data-end]").forEach((el) => {
-      el.addEventListener("change", () => this._call(el.dataset.end, "time", "set_value", { time: el.value + ":00" }));
+      el.addEventListener("change", () =>
+        this._call(el.dataset.end, "time", "set_value", { time: `${el.value}:00` })
+      );
     });
-    this._root.querySelectorAll("[data-more]").forEach((el) => {
-      el.addEventListener("click", () => this._more(el.dataset.more));
+    this._root.querySelectorAll("[data-edit]").forEach((el) => {
+      el.addEventListener("click", () => this._openEdit(el.dataset.edit));
     });
+    this._bindDialog();
 
     if (focusId) {
       const again = this._root.querySelector(`[data-eid="${focusId}"]`);
@@ -181,14 +262,183 @@ class IndoorGardenPanel extends HTMLElement {
     }
   }
 
-  _more(entityId) {
-    this.dispatchEvent(
-      new CustomEvent("hass-more-info", {
-        bubbles: true,
-        composed: true,
-        detail: { entityId },
+  _dialogHtml() {
+    const name = escapeHtml(this._editing.name);
+    const busy = this._busy ? "disabled" : "";
+    return `
+      <div class="backdrop" data-backdrop>
+        <div class="card dialog" role="dialog" aria-labelledby="ig-edit-title">
+          <h2 id="ig-edit-title">Manage zone</h2>
+          <p class="hint">Rename this zone or choose which lights and sockets it controls. Mode and times stay on the card.</p>
+          <div class="field">
+            <label>Zone name
+              <input type="text" data-zone-name data-eid="zone-name" value="${name}" ${busy} />
+            </label>
+          </div>
+          <div class="field">
+            <label>Lights and sockets</label>
+            <div data-entity-picker></div>
+          </div>
+          ${this._editError ? `<div class="error">${escapeHtml(this._editError)}</div>` : ""}
+          <div class="actions">
+            <button class="danger" type="button" data-delete ${busy}>Delete zone</button>
+            <button class="ghost" type="button" data-cancel ${busy}>Cancel</button>
+            <button class="primary" type="button" data-save ${busy}>Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _bindDialog() {
+    if (!this._editing) {
+      this._selectorEl = null;
+      return;
+    }
+    const nameInput = this._root.querySelector("[data-zone-name]");
+    nameInput?.addEventListener("input", () => {
+      this._editing.name = nameInput.value;
+    });
+    this._root.querySelector("[data-cancel]")?.addEventListener("click", () => this._closeEdit());
+    this._root.querySelector("[data-backdrop]")?.addEventListener("click", (ev) => {
+      if (ev.target?.dataset?.backdrop !== undefined) this._closeEdit();
+    });
+    this._root.querySelector("[data-save]")?.addEventListener("click", () => this._saveEdit());
+    this._root.querySelector("[data-delete]")?.addEventListener("click", () => this._deleteEdit());
+    this._mountSelector();
+  }
+
+  _mountSelector() {
+    const host = this._root.querySelector("[data-entity-picker]");
+    if (!host) return;
+    host.innerHTML = "";
+    if (customElements.get("ha-selector")) {
+      const el = document.createElement("ha-selector");
+      el.hass = this._hass;
+      el.selector = {
+        entity: {
+          multiple: true,
+          domain: ["light", "switch"],
+        },
+      };
+      el.value = this._editing.entities;
+      el.label = "Grow lights";
+      el.helper = "Pick devices or entities. Diagnostic switches such as child lock stay out of this list unless you search for them.";
+      el.addEventListener("value-changed", (ev) => {
+        this._editing.entities = asList(ev.detail?.value);
+      });
+      host.appendChild(el);
+      this._selectorEl = el;
+      return;
+    }
+    this._selectorEl = null;
+    const options = Object.keys(this._hass.states)
+      .filter((id) => id.startsWith("light.") || id.startsWith("switch."))
+      .filter((id) => {
+        const meta = this._hass.entities[id];
+        return !meta?.entity_category;
       })
-    );
+      .map((id) => {
+        const selected = this._editing.entities.includes(id) ? "selected" : "";
+        const label = this._hass.states[id]?.attributes?.friendly_name || id;
+        return `<option value="${escapeHtml(id)}" ${selected}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+    host.innerHTML = `<select multiple size="8" data-entity-fallback>${options}</select>`;
+    host.querySelector("select")?.addEventListener("change", (ev) => {
+      this._editing.entities = [...ev.target.selectedOptions].map((opt) => opt.value);
+    });
+  }
+
+  _zoneByMode(modeId) {
+    return zoneEntities(this._hass).find((z) => z.mode === modeId);
+  }
+
+  _openEdit(modeId) {
+    if (!this._isAdmin()) {
+      navigate("/config/integrations/integration/indoor_garden");
+      return;
+    }
+    const z = this._zoneByMode(modeId);
+    if (!z) return;
+    const schedule = this._hass.states[z.schedule];
+    const device = this._hass.devices[this._hass.entities[z.mode]?.device_id] || {};
+    this._editing = {
+      modeId,
+      entryId: this._entryId(z.mode),
+      name: device.name_by_user || device.name || "",
+      entities: asList(schedule?.attributes?.entities),
+    };
+    this._editError = "";
+    this._busy = false;
+    this._render();
+  }
+
+  _closeEdit() {
+    this._editing = null;
+    this._editError = "";
+    this._busy = false;
+    this._selectorEl = null;
+    this._render();
+  }
+
+  async _saveEdit() {
+    if (!this._editing || this._busy) return;
+    const name = (this._editing.name || "").trim();
+    const entities = asList(this._selectorEl?.value || this._editing.entities);
+    this._editing.entities = entities;
+    if (!name) {
+      this._editError = "Enter a zone name.";
+      this._render();
+      return;
+    }
+    if (!entities.length) {
+      this._editError = "Pick at least one light or switch.";
+      this._render();
+      return;
+    }
+    this._busy = true;
+    this._editError = "";
+    this._render();
+    try {
+      await this._hass.callWS({
+        type: "indoor_garden/update_zone",
+        entry_id: this._editing.entryId,
+        name,
+        entities,
+      });
+      this._closeEdit();
+    } catch (err) {
+      this._editError = err?.message || "Could not save this zone.";
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  async _deleteEdit() {
+    if (!this._editing || this._busy) return;
+    const name = this._editing.name || "this zone";
+    if (
+      !window.confirm(
+        `Delete “${name}”? The lights and sockets stay in Home Assistant. Only this Indoor Garden zone and its schedule are removed.`
+      )
+    ) {
+      return;
+    }
+    this._busy = true;
+    this._editError = "";
+    this._render();
+    try {
+      await this._hass.callWS({
+        type: "config_entries/delete",
+        entry_id: this._editing.entryId,
+      });
+      this._closeEdit();
+    } catch (err) {
+      this._editError = err?.message || "Could not delete this zone.";
+      this._busy = false;
+      this._render();
+    }
   }
 
   _card(hass, devices, z) {
@@ -201,7 +451,12 @@ class IndoorGardenPanel extends HTMLElement {
     const lights = (schedule && schedule.attributes.entities) || [];
     const desired = !!(schedule && schedule.attributes.desired_on);
     const options = (mode && mode.attributes.options) || ["Off", "On", "Auto"];
-    const opts = options.map((o) => `<option value="${o}" ${mode && mode.state === o ? "selected" : ""}>${o}</option>`).join("");
+    const opts = options
+      .map(
+        (o) =>
+          `<option value="${escapeHtml(o)}" ${mode && mode.state === o ? "selected" : ""}>${escapeHtml(o)}</option>`
+      )
+      .join("");
     const lightNames = lights
       .map((id) => hass.states[id]?.attributes.friendly_name || id)
       .join(", ");
@@ -209,23 +464,29 @@ class IndoorGardenPanel extends HTMLElement {
       <div class="card">
         <div class="top">
           <div>
-            <div class="name">${name}</div>
-            <div class="meta"><span class="dot ${desired ? "on" : ""}"></span>${desired ? "Lights should be on" : "Lights should be off"}${schedule && schedule.state === "on" ? " · in photoperiod" : ""}</div>
+            <div class="name">${escapeHtml(name)}</div>
+            <div class="meta"><span class="dot ${desired ? "on" : ""}"></span>${
+              desired ? "Lights should be on" : "Lights should be off"
+            }${schedule && schedule.state === "on" ? " · in photoperiod" : ""}</div>
           </div>
-          <button class="gear" type="button" data-more="${z.mode}" title="Zone details">⚙</button>
+          <button class="edit" type="button" data-edit="${escapeHtml(z.mode)}">Edit zone</button>
         </div>
         <div class="controls">
           <label>Mode
-            <select data-mode="${z.mode}" data-eid="${z.mode}">${opts}</select>
+            <select data-mode="${escapeHtml(z.mode)}" data-eid="${escapeHtml(z.mode)}">${opts}</select>
           </label>
           <label>Start
-            <input type="time" data-start="${z.start || ""}" data-eid="${z.start || ""}" value="${shortTime(start)}" />
+            <input type="time" data-start="${escapeHtml(z.start || "")}" data-eid="${escapeHtml(z.start || "")}" value="${shortTime(start)}" />
           </label>
           <label>End
-            <input type="time" data-end="${z.end || ""}" data-eid="${z.end || ""}" value="${shortTime(end)}" />
+            <input type="time" data-end="${escapeHtml(z.end || "")}" data-eid="${escapeHtml(z.end || "")}" value="${shortTime(end)}" />
           </label>
         </div>
-        <div class="entities">${lightNames ? "Controls: " + lightNames : "No lights assigned. Configure the zone to pick entities."}</div>
+        <div class="entities">${
+          lightNames
+            ? `Controls: ${escapeHtml(lightNames)}`
+            : "No lights assigned."
+        }<button type="button" data-edit="${escapeHtml(z.mode)}">Change</button></div>
       </div>
     `;
   }

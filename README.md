@@ -40,6 +40,12 @@ Copy `custom_components/indoor_garden` to `/config/custom_components/indoor_gard
 
 Then turn **off** the old `Grow Lights - Apply Mode` automation so the two systems do not fight. The old helpers (`input_select.grow_lights_mode`, start/end datetimes, switch group) can stay until you are happy, then you can hide or delete them.
 
+## Manage a zone
+
+On the **Indoor Garden** panel, use **Edit zone** (or **Change** next to the light list). You can rename the zone, pick different lights or sockets, or delete the zone. Deleting a zone does not remove the physical devices.
+
+You can also open **Settings → Devices & Services → Indoor Garden → Configure** on that zone.
+
 ## Another timing setup
 
 **Add entry** on the Indoor Garden integration (or **Add zone** in the panel). Give it a different name, pick different lights, set a different Start/End.
