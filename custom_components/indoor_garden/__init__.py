@@ -91,7 +91,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if not hass.data.get(_CARD_FLAG):
         hass.data[_CARD_FLAG] = True
         try:
-            frontend.add_extra_js_url(hass, f"{CARD_JS}?v=0.1.0")
+            frontend.add_extra_js_url(hass, f"{CARD_JS}?v=0.1.1")
         except Exception:  # noqa: BLE001
             hass.data.pop(_CARD_FLAG, None)
             _LOGGER.debug("Could not register Indoor Garden Lovelace module")
@@ -106,7 +106,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             hass,
             webcomponent_name="indoor-garden-panel",
             frontend_url_path=PANEL_URL_PATH,
-            module_url=f"{PANEL_JS}?v=0.1.0",
+            module_url=f"{PANEL_JS}?v=0.1.1",
             sidebar_title="Indoor Garden",
             sidebar_icon="mdi:sprout",
             require_admin=False,
