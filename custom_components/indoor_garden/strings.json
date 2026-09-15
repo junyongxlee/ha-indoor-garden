@@ -1,0 +1,59 @@
+{
+  "title": "Indoor Garden",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add grow zone",
+        "description": "Name this zone and pick the lights or sockets it should control. Each zone has its own Off / On / Auto schedule. Add another zone for a different photoperiod.",
+        "data": {
+          "name": "Zone name",
+          "entities": "Grow lights"
+        },
+        "data_description": {
+          "name": "Shown in the Indoor Garden panel and as the device name.",
+          "entities": "Switches or lights this zone turns on and off. Leave Home and other automations can still touch them; Indoor Garden puts them back."
+        }
+      }
+    },
+    "error": {
+      "invalid_name": "Enter a zone name.",
+      "no_entities": "Pick at least one light or switch."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit grow zone",
+        "description": "Change the name or which lights belong to this zone. The Off / On / Auto schedule stays on the Indoor Garden panel.",
+        "data": {
+          "name": "Zone name",
+          "entities": "Grow lights"
+        }
+      }
+    },
+    "error": {
+      "invalid_name": "Enter a zone name.",
+      "no_entities": "Pick at least one light or switch."
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Mode"
+      }
+    },
+    "time": {
+      "start": {
+        "name": "Start"
+      },
+      "end": {
+        "name": "End"
+      }
+    },
+    "binary_sensor": {
+      "in_schedule": {
+        "name": "In schedule"
+      }
+    }
+  }
+}

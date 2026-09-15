@@ -1,0 +1,27 @@
+{
+  "entity": {
+    "select": {
+      "mode": {
+        "default": "mdi:sprout",
+        "state": {
+          "Off": "mdi:sprout-outline",
+          "On": "mdi:white-balance-sunny",
+          "Auto": "mdi:sprout"
+        }
+      }
+    },
+    "time": {
+      "start": {
+        "default": "mdi:weather-sunset-up"
+      },
+      "end": {
+        "default": "mdi:weather-sunset-down"
+      }
+    },
+    "binary_sensor": {
+      "in_schedule": {
+        "default": "mdi:calendar-clock"
+      }
+    }
+  }
+}

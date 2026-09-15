@@ -1,0 +1,13 @@
+{
+  "domain": "indoor_garden",
+  "name": "Indoor Garden",
+  "after_dependencies": ["frontend", "http"],
+  "codeowners": ["@junyongxlee"],
+  "config_flow": true,
+  "documentation": "https://github.com/junyongxlee/ha-indoor-garden",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/junyongxlee/ha-indoor-garden/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
