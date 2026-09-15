@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DEFAULT_MODE, MODES
+from .const import DEFAULT_MODE, DOMAIN, MODES
 from .controller import GrowZone
 from .entity import IndoorGardenEntity
 
