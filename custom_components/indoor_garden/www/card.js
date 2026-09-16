@@ -1,6 +1,16 @@
+function isControl(el) {
+  return Boolean(el) && (el.tagName === "SELECT" || el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+}
+
 class IndoorGardenCard extends HTMLElement {
   static getStubConfig() {
     return {};
+  }
+
+  constructor() {
+    super();
+    this._interacting = false;
+    this._signature = "";
   }
 
   setConfig(config) {
@@ -13,7 +23,8 @@ class IndoorGardenCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    this._render();
+    if (this._interacting) return;
+    this._sync();
   }
 
   _zones() {
@@ -33,10 +44,75 @@ class IndoorGardenCard extends HTMLElement {
     return Object.values(byDevice).filter((z) => z.mode);
   }
 
+  _zoneSignature(zones) {
+    return zones
+      .map((z) => {
+        const mode = this._hass.states[z.mode];
+        const start = this._hass.states[z.start];
+        const end = this._hass.states[z.end];
+        return `${z.mode}|${mode?.state}|${start?.state}|${end?.state}`;
+      })
+      .join(";");
+  }
+
+  _bindInteraction() {
+    if (this._bound) return;
+    this._bound = true;
+    this._root.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (isControl(ev.target)) this._interacting = true;
+      },
+      true
+    );
+    this._root.addEventListener(
+      "focusin",
+      (ev) => {
+        if (isControl(ev.target)) this._interacting = true;
+      },
+      true
+    );
+    this._root.addEventListener("focusout", (ev) => {
+      const next = ev.relatedTarget;
+      if (isControl(next) && this._root.contains(next)) return;
+      if (!this._interacting) return;
+      this._interacting = false;
+      this._sync();
+    });
+  }
+
+  _sync() {
+    if (!this._hass) return;
+    const zones = this._zones();
+    const signature = this._zoneSignature(zones);
+    if (!this._root || this._root.querySelectorAll("[data-mode]").length !== zones.length) {
+      this._signature = signature;
+      this._render();
+      return;
+    }
+    if (signature === this._signature) return;
+    this._signature = signature;
+    const active = this._root.activeElement;
+    for (const z of zones) {
+      const modeEl = this._root.querySelector(`[data-mode="${CSS.escape(z.mode)}"]`);
+      const mode = this._hass.states[z.mode];
+      const start = this._hass.states[z.start];
+      const end = this._hass.states[z.end];
+      if (modeEl && modeEl !== active && mode && modeEl.value !== mode.state) modeEl.value = mode.state;
+      const status = this._root.querySelector(`[data-status="${CSS.escape(z.mode)}"]`);
+      if (status) {
+        const st = (start?.state || "").slice(0, 5);
+        const en = (end?.state || "").slice(0, 5);
+        status.textContent = `${st}–${en}`;
+      }
+    }
+  }
+
   _render() {
     if (!this._hass) return;
     if (!this._root) {
       this._root = this.attachShadow({ mode: "open" });
+      this._bindInteraction();
     }
     const zones = this._zones();
     const devices = this._hass.devices || {};
@@ -80,14 +156,14 @@ class IndoorGardenCard extends HTMLElement {
                   const device = devices[this._hass.entities[z.mode]?.device_id] || {};
                   const name = device.name_by_user || device.name || "Grow zone";
                   const options = (mode?.attributes.options || ["Off", "On", "Auto"])
-                    .map((o) => `<option ${mode && mode.state === o ? "selected" : ""}>${o}</option>`)
+                    .map((o) => `<option value="${o}" ${mode && mode.state === o ? "selected" : ""}>${o}</option>`)
                     .join("");
                   const st = (start?.state || "").slice(0, 5);
                   const en = (end?.state || "").slice(0, 5);
                   return `<div class="row">
                     <div>
                       <div class="name">${name}</div>
-                      <div class="status">${st}–${en}</div>
+                      <div class="status" data-status="${z.mode}">${st}–${en}</div>
                     </div>
                     <select data-mode="${z.mode}">${options}</select>
                   </div>`;

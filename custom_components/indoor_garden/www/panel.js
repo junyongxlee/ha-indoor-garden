@@ -45,6 +45,35 @@ function navigate(path) {
   );
 }
 
+function isControl(el) {
+  return Boolean(el) && (el.tagName === "SELECT" || el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+}
+
+function zoneSignature(hass, zones) {
+  return zones
+    .map((z) => {
+      const mode = hass.states[z.mode];
+      const start = hass.states[z.start];
+      const end = hass.states[z.end];
+      const schedule = hass.states[z.schedule];
+      const device = hass.devices?.[hass.entities?.[z.mode]?.device_id] || {};
+      const lights = (schedule?.attributes?.entities || []).join(",");
+      return [
+        z.mode,
+        z.start,
+        z.end,
+        mode?.state,
+        start?.state,
+        end?.state,
+        schedule?.state,
+        schedule?.attributes?.desired_on ? "1" : "0",
+        lights,
+        device.name_by_user || device.name || "",
+      ].join("|");
+    })
+    .join(";");
+}
+
 class IndoorGardenPanel extends HTMLElement {
   constructor() {
     super();
@@ -53,15 +82,41 @@ class IndoorGardenPanel extends HTMLElement {
     this._editError = "";
     this._busy = false;
     this._selectorEl = null;
+    this._mounted = false;
+    this._interacting = false;
+    this._zoneIds = "";
+    this._signature = "";
+    this._root.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (isControl(ev.target)) this._interacting = true;
+      },
+      true
+    );
+    this._root.addEventListener(
+      "focusin",
+      (ev) => {
+        if (isControl(ev.target)) this._interacting = true;
+      },
+      true
+    );
+    this._root.addEventListener("focusout", (ev) => {
+      const next = ev.relatedTarget;
+      if (isControl(next) && this._root.contains(next)) return;
+      if (!this._interacting) return;
+      this._interacting = false;
+      this._sync();
+    });
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._editing && this._selectorEl) {
-      this._selectorEl.hass = hass;
+    if (this._editing) {
+      if (this._selectorEl) this._selectorEl.hass = hass;
       return;
     }
-    this._render();
+    if (this._interacting) return;
+    this._sync();
   }
 
   get hass() {
@@ -81,13 +136,75 @@ class IndoorGardenPanel extends HTMLElement {
     return unique.endsWith("_mode") ? unique.slice(0, -5) : unique;
   }
 
+  _sync() {
+    const hass = this._hass;
+    if (!hass) return;
+    const zones = zoneEntities(hass);
+    const ids = zones.map((z) => z.mode).join(",");
+    const signature = zoneSignature(hass, zones);
+    if (!this._mounted || ids !== this._zoneIds) {
+      this._zoneIds = ids;
+      this._signature = signature;
+      this._render();
+      return;
+    }
+    if (signature === this._signature) return;
+    this._signature = signature;
+    this._patch(zones);
+  }
+
+  _patch(zones) {
+    const hass = this._hass;
+    const devices = hass.devices || {};
+    const active = this._root.activeElement;
+    for (const z of zones) {
+      const card = this._root.querySelector(`[data-card="${CSS.escape(z.mode)}"]`);
+      if (!card) {
+        this._render();
+        return;
+      }
+      const mode = hass.states[z.mode];
+      const start = hass.states[z.start];
+      const end = hass.states[z.end];
+      const schedule = hass.states[z.schedule];
+      const device = devices[hass.entities[z.mode]?.device_id] || {};
+      const name = device.name_by_user || device.name || (mode && mode.attributes.friendly_name) || "Grow zone";
+      const lights = (schedule && schedule.attributes.entities) || [];
+      const desired = !!(schedule && schedule.attributes.desired_on);
+      const lightNames = lights.map((id) => hass.states[id]?.attributes.friendly_name || id).join(", ");
+      const modeEl = card.querySelector("[data-mode]");
+      const startEl = card.querySelector("[data-start]");
+      const endEl = card.querySelector("[data-end]");
+      if (modeEl && modeEl !== active && mode && modeEl.value !== mode.state) modeEl.value = mode.state;
+      if (startEl && startEl !== active) {
+        const value = shortTime(start);
+        if (startEl.value !== value) startEl.value = value;
+      }
+      if (endEl && endEl !== active) {
+        const value = shortTime(end);
+        if (endEl.value !== value) endEl.value = value;
+      }
+      const nameEl = card.querySelector("[data-name]");
+      if (nameEl) nameEl.textContent = name;
+      const metaEl = card.querySelector("[data-meta]");
+      if (metaEl) {
+        metaEl.innerHTML = `<span class="dot ${desired ? "on" : ""}"></span>${
+          desired ? "Lights should be on" : "Lights should be off"
+        }${schedule && schedule.state === "on" ? " · in photoperiod" : ""}`;
+      }
+      const lightsEl = card.querySelector("[data-lights]");
+      if (lightsEl) lightsEl.textContent = lightNames ? `Controls: ${lightNames}` : "No lights assigned.";
+    }
+  }
+
   _render() {
     const hass = this._hass;
     if (!hass) return;
     const zones = zoneEntities(hass);
     const devices = hass.devices || {};
-    const focused = this._root.activeElement;
-    const focusId = focused && focused.dataset ? focused.dataset.eid : null;
+    this._mounted = true;
+    this._zoneIds = zones.map((z) => z.mode).join(",");
+    this._signature = zoneSignature(hass, zones);
 
     this._root.innerHTML = `
       <style>
@@ -195,18 +312,18 @@ class IndoorGardenPanel extends HTMLElement {
         .backdrop {
           position: fixed; inset: 0;
           background: rgba(0,0,0,0.45);
-          display: flex; align-items: center; justify-content: center;
-          padding: 16px;
+          display: flex; align-items: flex-start; justify-content: center;
+          padding: 48px 16px;
+          overflow: auto;
           z-index: 8;
         }
         .dialog {
           width: min(560px, 100%);
-          max-height: 90vh;
-          overflow: auto;
+          overflow: visible;
         }
         .dialog h2 { margin: 0 0 4px; font-size: 1.25rem; font-weight: 600; }
         .hint { color: var(--secondary-text-color); font-size: 0.85rem; margin: 0 0 16px; }
-        .field { margin-bottom: 14px; }
+        .field { margin-bottom: 14px; overflow: visible; }
         .error { color: var(--error-color, #db4437); font-size: 0.85rem; margin: 8px 0; }
         .actions {
           display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
@@ -255,11 +372,6 @@ class IndoorGardenPanel extends HTMLElement {
       el.addEventListener("click", () => this._openEdit(el.dataset.edit));
     });
     this._bindDialog();
-
-    if (focusId) {
-      const again = this._root.querySelector(`[data-eid="${focusId}"]`);
-      if (again) again.focus();
-    }
   }
 
   _dialogHtml() {
@@ -461,11 +573,11 @@ class IndoorGardenPanel extends HTMLElement {
       .map((id) => hass.states[id]?.attributes.friendly_name || id)
       .join(", ");
     return `
-      <div class="card">
+      <div class="card" data-card="${escapeHtml(z.mode)}">
         <div class="top">
           <div>
-            <div class="name">${escapeHtml(name)}</div>
-            <div class="meta"><span class="dot ${desired ? "on" : ""}"></span>${
+            <div class="name" data-name>${escapeHtml(name)}</div>
+            <div class="meta" data-meta><span class="dot ${desired ? "on" : ""}"></span>${
               desired ? "Lights should be on" : "Lights should be off"
             }${schedule && schedule.state === "on" ? " · in photoperiod" : ""}</div>
           </div>
@@ -482,11 +594,9 @@ class IndoorGardenPanel extends HTMLElement {
             <input type="time" data-end="${escapeHtml(z.end || "")}" data-eid="${escapeHtml(z.end || "")}" value="${shortTime(end)}" />
           </label>
         </div>
-        <div class="entities">${
-          lightNames
-            ? `Controls: ${escapeHtml(lightNames)}`
-            : "No lights assigned."
-        }<button type="button" data-edit="${escapeHtml(z.mode)}">Change</button></div>
+        <div class="entities"><span data-lights>${
+          lightNames ? `Controls: ${escapeHtml(lightNames)}` : "No lights assigned."
+        }</span><button type="button" data-edit="${escapeHtml(z.mode)}">Change</button></div>
       </div>
     `;
   }
