@@ -8,6 +8,7 @@ from typing import Final
 from homeassistant.const import Platform
 
 DOMAIN: Final = "indoor_garden"
+VERSION: Final = "0.2.3"
 PLATFORMS: Final = [Platform.BINARY_SENSOR, Platform.SELECT, Platform.TIME]
 
 CONF_ENTITIES: Final = "entities"
