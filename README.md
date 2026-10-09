@@ -56,4 +56,18 @@ You can also open **Settings → Devices & Services → Indoor Garden → Config
 type: custom:indoor-garden-card
 ```
 
-The card is registered automatically when the integration loads.
+In **storage-mode** Lovelace (the default), the integration registers
+`/indoor_garden/card.js` as a dashboard resource automatically on setup,
+including a version query for cache busting. On upgrade it updates that
+resource and removes older `/indoor_garden/card.js…` entries so the module
+is not loaded twice.
+
+In **YAML-mode** Lovelace, add the resource yourself:
+
+```yaml
+resources:
+  - url: /indoor_garden/card.js?v=0.2.3
+    type: module
+```
+
+Then restart (or reload resources) so dashboards pick it up.

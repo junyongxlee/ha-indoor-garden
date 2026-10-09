@@ -8,7 +8,8 @@ from pathlib import Path
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.setup import async_setup_component
@@ -21,6 +22,7 @@ from .const import (
     PANEL_URL_PATH,
     PLATFORMS,
     STATIC_URL,
+    VERSION,
 )
 from .controller import GrowZone
 from .websocket import async_register_websocket_handlers
@@ -96,11 +98,17 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
 
     if not hass.data.get(_CARD_FLAG):
         hass.data[_CARD_FLAG] = True
-        try:
-            frontend.add_extra_js_url(hass, f"{CARD_JS}?v=0.2.2")
-        except Exception:  # noqa: BLE001
-            hass.data.pop(_CARD_FLAG, None)
-            _LOGGER.debug("Could not register Indoor Garden Lovelace module")
+
+        async def _register_card(_event: Event | None = None) -> None:
+            await _async_register_lovelace_card(hass)
+
+        # Lovelace resources must load through the dashboard resource pipeline.
+        # frontend.add_extra_js_url races HA's scoped custom element registry and
+        # intermittently yields "Configuration error" for custom:indoor-garden-card.
+        if hass.is_running:
+            await _register_card()
+        else:
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_card)
 
     if hass.data.get(_PANEL_FLAG):
         return
@@ -112,7 +120,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             hass,
             webcomponent_name="indoor-garden-panel",
             frontend_url_path=PANEL_URL_PATH,
-            module_url=f"{PANEL_JS}?v=0.2.2",
+            module_url=f"{PANEL_JS}?v={VERSION}",
             sidebar_title="Indoor Garden",
             sidebar_icon="mdi:sprout",
             require_admin=False,
@@ -122,3 +130,58 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     except Exception:
         hass.data.pop(_PANEL_FLAG, None)
         raise
+
+
+async def _async_register_lovelace_card(hass: HomeAssistant) -> None:
+    """Register card.js as a Lovelace dashboard resource (storage mode).
+
+    Loads the module through Lovelace's resource pipeline so the custom element
+    is defined in the same registry dashboards use. Replaces any existing
+    resource whose URL starts with CARD_JS (including older ?v= / &lovelace=
+    variants) so the card is not loaded twice after an upgrade.
+    """
+    card_url = f"{CARD_JS}?v={VERSION}"
+    lovelace = hass.data.get("lovelace")
+    resources = getattr(lovelace, "resources", None)
+    resource_mode = getattr(lovelace, "resource_mode", None)
+
+    if resource_mode != "storage" or resources is None:
+        _LOGGER.warning(
+            "Indoor Garden could not auto-register the Lovelace card resource "
+            "(YAML-mode Lovelace or Lovelace unavailable). Add a dashboard "
+            "resource manually: url %s, type module",
+            card_url,
+        )
+        return
+
+    try:
+        # Force lazy load before async_items/create — an empty collection + create
+        # can overwrite lovelace_resources storage (HA core issue #165767).
+        if not getattr(resources, "loaded", False):
+            await resources.async_get_info()
+
+        existing = [
+            item
+            for item in resources.async_items()
+            if str(item.get("url", "")).startswith(CARD_JS)
+        ]
+
+        if existing:
+            primary, *duplicates = existing
+            if primary.get("url") != card_url or primary.get("type") != "module":
+                await resources.async_update_item(
+                    primary["id"],
+                    {"res_type": "module", "url": card_url},
+                )
+            for dup in duplicates:
+                await resources.async_delete_item(dup["id"])
+            return
+
+        await resources.async_create_item({"res_type": "module", "url": card_url})
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "Could not register the Lovelace resource for Indoor Garden card; "
+            "add it manually: url %s, type module",
+            card_url,
+            exc_info=True,
+        )
